@@ -1,0 +1,23 @@
+[project]
+name = "love-ai"
+version = "0.1.0"
+description = "Love Laundry Analytics & Insights Service — secure forecasting over MongoDB (AES-256-GCM, HMAC request signing)"
+readme = "README.md"
+authors = [
+    { name = "DulshanSiriwardhana", email = "dulshansiriwardhanaofficial@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115.0",
+    "pydantic[email]>=2.13.4",
+    "pydantic-settings>=2.5.2",
+    "motor>=3.6.0,<4.0.0",
+    "pymongo>=4.6.0",
+    "cryptography>=42.0.0",
+    "pyjwt>=2.8.0",
+    "python-dotenv>=1.2.2",
+    "uvicorn>=0.30.0",
+]
+
+[tool.vercel]
+entrypoint = "api.index:app"
