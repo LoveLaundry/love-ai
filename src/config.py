@@ -1,4 +1,4 @@
-import os
+import json
 from typing import List
 
 from pydantic import AliasChoices, Field
@@ -19,26 +19,46 @@ class Settings(BaseSettings):
     mongodb_main_db: str | None = Field(default=None, validation_alias=AliasChoices("MONGODB_MAIN_DB"))
 
     master_key: str = "CHANGE-ME-IN-PRODUCTION-love-laundry-2026"
-    love_ai_api_keys: List[str] = Field(default_factory=lambda: ["dev-key-change-me"])
+    # Raw string on purpose: pydantic-settings would try to parse a List[str]
+    # field as JSON and crash on plain / comma-separated / empty values.
+    # Parsing happens in ai_api_keys_raw (comma-separated or JSON accepted).
+    api_keys: str = Field(default="", validation_alias=AliasChoices("LOVE_AI_API_KEYS"))
     jwt_secret: str | None = None
     signature_ttl_seconds: int = 300
 
-    cors_origins: List[str] = Field(
-        default_factory=lambda: [
-            "http://localhost:5173",
-            "http://localhost:3000",
-            "https://lovelaundry-manager.vercel.app",
-        ]
+    cors: str = Field(
+        default='["http://localhost:5173","http://localhost:3000","https://lovelaundry-manager.vercel.app"]',
+        validation_alias=AliasChoices("CORS_ORIGINS"),
     )
     rate_limit_per_minute: int = 120
 
     @property
     def ai_api_keys_raw(self) -> List[str]:
         """Return the configured plaintext API keys (never exposed in responses)."""
-        keys = os.getenv("LOVE_AI_API_KEYS") or ""
-        if keys.strip():
-            return [k.strip() for k in keys.split(",") if k.strip()]
-        return self.love_ai_api_keys
+        keys = self.api_keys.strip()
+        if not keys:
+            return []
+        try:
+            parsed = json.loads(keys)
+            if isinstance(parsed, list):
+                return [str(k).strip() for k in parsed if str(k).strip()]
+        except (ValueError, TypeError):
+            pass
+        return [k.strip() for k in keys.split(",") if k.strip()]
+
+    @property
+    def cors_origins(self) -> List[str]:
+        """Parsed CORS origins — accepts JSON array or comma-separated values."""
+        raw = self.cors.strip()
+        if not raw:
+            return []
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, list):
+                return [str(o) for o in parsed]
+        except (ValueError, TypeError):
+            pass
+        return [o.strip() for o in raw.split(",") if o.strip()]
 
     def resolve_main_uri(self) -> str:
         return self.mongodb_main_uri or self.mongo_uri
