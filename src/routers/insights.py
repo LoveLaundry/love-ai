@@ -1,4 +1,5 @@
 """Love AI insight endpoints — all authenticated via hashed API key + HMAC request signature."""
+import asyncio
 import hashlib
 import json
 
@@ -50,9 +51,18 @@ async def dashboard_insights(
     user: dict | None = Depends(optional_current_user),
 ):
     now_year, now_month = None, None  # analytics default = now
-    txns = await transactions_collection().find({}).to_list(length=None)
-    expenses = await expenses_collection().find({}).to_list(length=None)
-    slips = await salary_slips_collection().find({"status": {"$ne": "DELETED"}}).to_list(length=None)
+    # Projections keep the transfer small (series engine only reads these fields)
+    # and the three fetches run concurrently instead of back-to-back.
+    txns_fut = transactions_collection().find(
+        {}, {"transaction_date": 1, "total_amount": 1}
+    ).to_list(length=None)
+    expenses_fut = expenses_collection().find(
+        {}, {"date": 1, "amount": 1}
+    ).to_list(length=None)
+    slips_fut = salary_slips_collection().find(
+        {"status": {"$ne": "DELETED"}}, {"period_start": 1, "net_salary": 1}
+    ).to_list(length=None)
+    txns, expenses, slips = await asyncio.gather(txns_fut, expenses_fut, slips_fut)
 
     revenue_series = analytics.default_series_data(txns, "transaction_date", "total_amount", months)
     expense_series = analytics.default_series_data(expenses, "date", "amount", months)
@@ -87,7 +97,9 @@ async def revenue_insights(
     _auth: dict = Depends(verify_signed_request),
     user: dict | None = Depends(optional_current_user),
 ):
-    txns = await transactions_collection().find({}).to_list(length=None)
+    txns = await transactions_collection().find(
+        {}, {"transaction_date": 1, "total_amount": 1, "customer_id": 1, "customer_name": 1, "encryption_metadata": 1}
+    ).to_list(length=None)
     series = analytics.default_series_data(txns, "transaction_date", "total_amount", months)
     vals = [s["value"] for s in series]
     forecast = analytics.ols_forecast(vals, 3)
@@ -124,14 +136,16 @@ async def expense_insights(
     _auth: dict = Depends(verify_signed_request),
     user: dict | None = Depends(optional_current_user),
 ):
-    expenses = await expenses_collection().find({}).to_list(length=None)
+    expenses = await expenses_collection().find(
+        {}, {"date": 1, "amount": 1, "category_id": 1}
+    ).to_list(length=None)
     series = analytics.default_series_data(expenses, "date", "amount", months)
     vals = [s["value"] for s in series]
     forecast = analytics.ols_forecast(vals, 3)
 
     # Top categories by amount (decrypt category names via category collection)
     from ..database import db
-    cat_rows = await db()["expense_categories"].find({}).to_list(length=None)
+    cat_rows = await db()["expense_categories"].find({}, {"name": 1, "encryption_metadata": 1}).to_list(length=None)
     cat_names: dict[str, str] = {}
     for c in cat_rows:
         dec = decrypt_dict(c, EXPCAT_SENSITIVE)
@@ -161,7 +175,10 @@ async def salary_insights(
     _auth: dict = Depends(verify_signed_request),
     user: dict | None = Depends(optional_current_user),
 ):
-    slips_docs = await salary_slips_collection().find({"status": {"$ne": "DELETED"}}).to_list(length=None)
+    slips_docs = await salary_slips_collection().find(
+        {"status": {"$ne": "DELETED"}},
+        {"period_start": 1, "net_salary": 1, "employee_id": 1, "employee_name": 1},
+    ).to_list(length=None)
     series = analytics.default_series_data(slips_docs, "period_start", "net_salary", months)
     vals = [s["value"] for s in series]
     forecast = analytics.ols_forecast(vals, 3)
@@ -194,8 +211,11 @@ async def payroll_risk_insights(
     user: dict | None = Depends(optional_current_user),
 ):
     # Outstanding advances grouped per employee
-    advances = await salary_advances_collection().find({"status": "OUTSTANDING", "outstanding": {"$gt": 0}}).to_list(length=None)
-    employees = await employees_collection().find({}).to_list(length=None)
+    advances = await salary_advances_collection().find(
+        {"status": "OUTSTANDING", "outstanding": {"$gt": 0}},
+        {"employee_id": 1, "outstanding": 1},
+    ).to_list(length=None)
+    employees = await employees_collection().find({}, {"name": 1, "encryption_metadata": 1}).to_list(length=None)
     emp_names: dict[str, str] = {}
     for e in employees:
         dec = decrypt_dict(e, EMPLOYEE_SENSITIVE)
@@ -240,7 +260,7 @@ async def custom_query(
         from fastapi import HTTPException
         raise HTTPException(status_code=400, detail=f"Unknown metric '{metric}'")
 
-    docs = await coll.find({}).to_list(length=None)
+    docs = await coll.find({}, {date_key: 1, value_key: 1}).to_list(length=None)
     series = analytics.default_series_data(docs, date_key, value_key, months)
     vals = [s["value"] for s in series]
     forecast = analytics.ols_forecast(vals, 3)
