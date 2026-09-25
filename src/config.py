@@ -1,8 +1,12 @@
 import json
 from typing import List
 
-from pydantic import AliasChoices, Field
+from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Placeholder shipped in .env.example. Copying it verbatim must not silently
+# become the production encryption key.
+PLACEHOLDER_MASTER_KEY = "CHANGE-ME-IN-PRODUCTION-love-laundry-2026"
 
 
 class Settings(BaseSettings):
@@ -18,7 +22,7 @@ class Settings(BaseSettings):
     mongodb_main_uri: str | None = Field(default=None, validation_alias=AliasChoices("MONGODB_MAIN_URI"))
     mongodb_main_db: str | None = Field(default=None, validation_alias=AliasChoices("MONGODB_MAIN_DB"))
 
-    master_key: str = "CHANGE-ME-IN-PRODUCTION-love-laundry-2026"
+    master_key: str = Field(validation_alias=AliasChoices("MASTER_KEY"))
     # Raw string on purpose: pydantic-settings would try to parse a List[str]
     # field as JSON and crash on plain / comma-separated / empty values.
     # Parsing happens in ai_api_keys_raw (comma-separated or JSON accepted).
@@ -31,6 +35,20 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("CORS_ORIGINS"),
     )
     rate_limit_per_minute: int = 120
+
+    @field_validator("master_key")
+    @classmethod
+    def _reject_placeholder_master_key(cls, value: str) -> str:
+        """Refuse blank or placeholder keys instead of deriving weak crypto."""
+        if not value or not value.strip():
+            raise ValueError("MASTER_KEY must not be empty")
+        if value.strip() == PLACEHOLDER_MASTER_KEY:
+            raise ValueError(
+                "MASTER_KEY is still the .env.example placeholder. "
+                "Generate a unique secret, e.g. `python -c \"import secrets;"
+                " print(secrets.token_urlsafe(32))\"`."
+            )
+        return value
 
     @property
     def ai_api_keys_raw(self) -> List[str]:
