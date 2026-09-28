@@ -1,7 +1,10 @@
 # syntax=docker/dockerfile:1
 FROM python:3.13-slim
 
-ENV PYTHONDONTWRITEBYTECODE=1 \
+# The container ships UTC. Pin it to Sri Lanka time so logs and anything
+# falling back to the host clock agree with the rest of the system.
+ENV TZ=Asia/Colombo \
+    PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     HOME=/var/www
