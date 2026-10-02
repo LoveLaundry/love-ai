@@ -65,17 +65,21 @@ async def verify_signed_request(
     if not constant_time_equal(_hex(body), x_body_hash):
         raise HTTPException(status_code=401, detail="Body hash mismatch — request payload tampered")
 
+    signed_path = request.url.path
+    if request.url.query:
+        signed_path = f"{signed_path}?{request.url.query}"
+
     ok = verify_request_signature(
         api_key,
         request.method,
-        request.url.path,
+        signed_path,
         x_timestamp,
         x_body_hash,
         x_signature,
     )
     if not ok:
         raise HTTPException(status_code=401, detail="Invalid request signature")
-    return {"api_key": api_key, "path": request.url.path, "timestamp": ts}
+    return {"api_key": api_key, "path": signed_path, "timestamp": ts}
 
 
 def _hex(data: bytes) -> str:
