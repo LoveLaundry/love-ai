@@ -157,5 +157,27 @@ def verify_request_signature(
     return constant_time_equal(expected, provided_signature)
 
 
+def canonical_json(value) -> str:
+    """Canonical JSON for cross-platform integrity hashes.
+
+    MUST stay byte-identical to the clients that verify `data_hash`:
+      • quotations-ui `canonicalJson`  (config/ai.ts)
+      • skaner (Dart)     `canonicalJson`  (core/utils/idempotency.dart)
+
+    Those implementations emit COMPACT separators (no spaces after `,`/`:`)
+    with object keys sorted and non-ASCII preserved as UTF-8. Python's
+    `json.dumps` defaults to `", "`/`": "` separators and ASCII-escaping, so
+    the defaults cannot be used here — that mismatch made every client
+    integrity check fail.
+    """
+    return json.dumps(
+        value,
+        sort_keys=True,
+        default=str,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    )
+
+
 def sha256_hex(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()

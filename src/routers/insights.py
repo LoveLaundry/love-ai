@@ -1,12 +1,11 @@
 """Love AI insight endpoints — all authenticated via hashed API key + HMAC request signature."""
 import asyncio
 import hashlib
-import json
 
 from fastapi import APIRouter, Depends, Query
 
 from ..auth_helper import optional_current_user, verify_signed_request
-from ..crypto_helper import decrypt_dict, sha256_hex
+from ..crypto_helper import canonical_json, decrypt_dict, sha256_hex
 from ..security import audit_access
 from .. import analytics
 from ..database import (
@@ -28,7 +27,7 @@ EXPCAT_SENSITIVE = ["name"]
 
 
 def _hash_payload(payload: dict) -> str:
-    return sha256_hex(json.dumps(payload, sort_keys=True, default=str).encode("utf-8"))
+    return sha256_hex(canonical_json(payload).encode("utf-8"))
 
 
 def _wrap(payload: dict, trusted: bool = False) -> dict:
