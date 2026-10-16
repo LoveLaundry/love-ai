@@ -97,3 +97,19 @@ def optional_current_user(credentials=Security(security)) -> dict | None:
         return jwt.decode(credentials.credentials, settings.jwt_secret, algorithms=["HS256"])
     except jwt.InvalidTokenError:
         return None
+
+
+def current_user(credentials=Security(security)) -> dict:
+    """Require a valid user-service JWT — the tenant context for every read.
+
+    Fails closed: a missing, malformed, or expired token is a 401 rather than
+    an anonymous all-tenant query. The token alone decides which laundry a
+    caller may read; the API key/signature only proves the request is intact.
+    """
+    user = optional_current_user(credentials)
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication required — a signed-in session is needed to scope tenant data",
+        )
+    return user

@@ -4,9 +4,10 @@ import hashlib
 
 from fastapi import APIRouter, Depends, Query
 
-from ..auth_helper import optional_current_user, verify_signed_request
+from ..auth_helper import current_user, verify_signed_request
 from ..crypto_helper import canonical_json, decrypt_dict, sha256_hex
 from ..security import audit_access
+from ..tenancy import resolve_laundry_id, scoped_query
 from .. import analytics
 from ..database import (
     attendance_collection,
@@ -47,19 +48,23 @@ async def health(_key: dict = Depends(verify_signed_request)):
 async def dashboard_insights(
     months: int = Query(12, ge=1, le=24),
     _auth: dict = Depends(verify_signed_request),
-    user: dict | None = Depends(optional_current_user),
+    user: dict = Depends(current_user),
 ):
-    now_year, now_month = None, None  # analytics default = now
+    # Trusted tenant comes only from the session; every read is scoped to it.
     # Projections keep the transfer small (series engine only reads these fields)
     # and the three fetches run concurrently instead of back-to-back.
+    lid = resolve_laundry_id(user)
+    txn_query = scoped_query({}, lid)
+    exp_query = scoped_query({}, lid)
+    slip_query = scoped_query({"status": {"$ne": "DELETED"}}, lid)
     txns_fut = transactions_collection().find(
-        {}, {"transaction_date": 1, "total_amount": 1}
+        txn_query, {"transaction_date": 1, "total_amount": 1}
     ).to_list(length=None)
     expenses_fut = expenses_collection().find(
-        {}, {"date": 1, "amount": 1}
+        exp_query, {"date": 1, "amount": 1}
     ).to_list(length=None)
     slips_fut = salary_slips_collection().find(
-        {"status": {"$ne": "DELETED"}}, {"period_start": 1, "net_salary": 1}
+        slip_query, {"period_start": 1, "net_salary": 1}
     ).to_list(length=None)
     txns, expenses, slips = await asyncio.gather(txns_fut, expenses_fut, slips_fut)
 
@@ -86,7 +91,7 @@ async def dashboard_insights(
         "total_payroll": round(sum(payroll_vals), 2),
         "avg_monthly_net": round(sum(net) / len(net), 2) if net else 0.0,
     }
-    await audit_access((user or {}).get("user_id"), "insights.dashboard", None, {"months": months})
+    await audit_access(user.get("user_id"), "insights.dashboard", None, {"months": months})
     return _wrap(payload)
 
 
@@ -94,10 +99,12 @@ async def dashboard_insights(
 async def revenue_insights(
     months: int = Query(12, ge=1, le=24),
     _auth: dict = Depends(verify_signed_request),
-    user: dict | None = Depends(optional_current_user),
+    user: dict = Depends(current_user),
 ):
+    lid = resolve_laundry_id(user)
+    txn_query = scoped_query({}, lid)
     txns = await transactions_collection().find(
-        {}, {"transaction_date": 1, "total_amount": 1, "customer_id": 1, "customer_name": 1, "encryption_metadata": 1}
+        txn_query, {"transaction_date": 1, "total_amount": 1, "customer_id": 1, "customer_name": 1, "encryption_metadata": 1}
     ).to_list(length=None)
     series = analytics.default_series_data(txns, "transaction_date", "total_amount", months)
     vals = [s["value"] for s in series]
@@ -125,7 +132,7 @@ async def revenue_insights(
         "top_customers": top_customers,
         "projected_next_3_months": forecast["forecast"],
     }
-    await audit_access((user or {}).get("user_id"), "insights.revenue", None, {"months": months})
+    await audit_access(user.get("user_id"), "insights.revenue", None, {"months": months})
     return _wrap(payload)
 
 
@@ -133,10 +140,12 @@ async def revenue_insights(
 async def expense_insights(
     months: int = Query(12, ge=1, le=24),
     _auth: dict = Depends(verify_signed_request),
-    user: dict | None = Depends(optional_current_user),
+    user: dict = Depends(current_user),
 ):
+    lid = resolve_laundry_id(user)
+    exp_query = scoped_query({}, lid)
     expenses = await expenses_collection().find(
-        {}, {"date": 1, "amount": 1, "category_id": 1}
+        exp_query, {"date": 1, "amount": 1, "category_id": 1}
     ).to_list(length=None)
     series = analytics.default_series_data(expenses, "date", "amount", months)
     vals = [s["value"] for s in series]
@@ -144,7 +153,9 @@ async def expense_insights(
 
     # Top categories by amount (decrypt category names via category collection)
     from ..database import db
-    cat_rows = await db()["expense_categories"].find({}, {"name": 1, "encryption_metadata": 1}).to_list(length=None)
+    cat_rows = await db()["expense_categories"].find(
+        scoped_query({}, lid), {"name": 1, "encryption_metadata": 1}
+    ).to_list(length=None)
     cat_names: dict[str, str] = {}
     for c in cat_rows:
         dec = decrypt_dict(c, EXPCAT_SENSITIVE)
@@ -164,7 +175,7 @@ async def expense_insights(
         "top_categories": top_categories,
         "projected_next_3_months": forecast["forecast"],
     }
-    await audit_access((user or {}).get("user_id"), "insights.expenses", None, {"months": months})
+    await audit_access(user.get("user_id"), "insights.expenses", None, {"months": months})
     return _wrap(payload)
 
 
@@ -172,10 +183,12 @@ async def expense_insights(
 async def salary_insights(
     months: int = Query(12, ge=1, le=24),
     _auth: dict = Depends(verify_signed_request),
-    user: dict | None = Depends(optional_current_user),
+    user: dict = Depends(current_user),
 ):
+    lid = resolve_laundry_id(user)
+    slip_query = scoped_query({"status": {"$ne": "DELETED"}}, lid)
     slips_docs = await salary_slips_collection().find(
-        {"status": {"$ne": "DELETED"}},
+        slip_query,
         {"period_start": 1, "net_salary": 1, "employee_id": 1, "employee_name": 1},
     ).to_list(length=None)
     series = analytics.default_series_data(slips_docs, "period_start", "net_salary", months)
@@ -200,21 +213,24 @@ async def salary_insights(
         "top_employees": [{**e, "total": round(e["total"], 2)} for e in employees_sorted[:10]],
         "projected_next_3_months": forecast["forecast"],
     }
-    await audit_access((user or {}).get("user_id"), "insights.salary", None, {"months": months})
+    await audit_access(user.get("user_id"), "insights.salary", None, {"months": months})
     return _wrap(payload)
 
 
 @router.get("/insights/payroll-risk")
 async def payroll_risk_insights(
     _auth: dict = Depends(verify_signed_request),
-    user: dict | None = Depends(optional_current_user),
+    user: dict = Depends(current_user),
 ):
+    lid = resolve_laundry_id(user)
+    adv_query = scoped_query({"status": "OUTSTANDING", "outstanding": {"$gt": 0}}, lid)
+    emp_query = scoped_query({}, lid)
     # Outstanding advances grouped per employee
     advances = await salary_advances_collection().find(
-        {"status": "OUTSTANDING", "outstanding": {"$gt": 0}},
+        adv_query,
         {"employee_id": 1, "outstanding": 1},
     ).to_list(length=None)
-    employees = await employees_collection().find({}, {"name": 1, "encryption_metadata": 1}).to_list(length=None)
+    employees = await employees_collection().find(emp_query, {"name": 1, "encryption_metadata": 1}).to_list(length=None)
     emp_names: dict[str, str] = {}
     for e in employees:
         dec = decrypt_dict(e, EMPLOYEE_SENSITIVE)
@@ -234,7 +250,7 @@ async def payroll_risk_insights(
         "total_outstanding_advances": round(sum(r["outstanding"] for r in risk_rows), 2),
         "employees_at_risk": risk_rows,
     }
-    await audit_access((user or {}).get("user_id"), "insights.payroll_risk", None, {})
+    await audit_access(user.get("user_id"), "insights.payroll_risk", None, {})
     return _wrap(payload)
 
 
@@ -242,7 +258,7 @@ async def payroll_risk_insights(
 async def custom_query(
     payload: dict,
     _auth: dict = Depends(verify_signed_request),
-    user: dict | None = Depends(optional_current_user),
+    user: dict = Depends(current_user),
 ):
     """Structured analytical query: {metric: 'revenue'|'expenses'|'salary'|'net', months?: int}."""
     metric = str(payload.get("metric") or "revenue").lower()
@@ -259,7 +275,11 @@ async def custom_query(
         from fastapi import HTTPException
         raise HTTPException(status_code=400, detail=f"Unknown metric '{metric}'")
 
-    docs = await coll.find({}, {date_key: 1, value_key: 1}).to_list(length=None)
+    lid = resolve_laundry_id(user)
+    base_query = scoped_query({}, lid)
+    if metric == "salary":
+        base_query = scoped_query({"status": {"$ne": "DELETED"}}, lid)
+    docs = await coll.find(base_query, {date_key: 1, value_key: 1}).to_list(length=None)
     series = analytics.default_series_data(docs, date_key, value_key, months)
     vals = [s["value"] for s in series]
     forecast = analytics.ols_forecast(vals, 3)
@@ -274,7 +294,7 @@ async def custom_query(
         "trend": "up" if forecast["slope"] > 0 else ("down" if forecast["slope"] < 0 else "flat"),
         "projected_next_3_months": forecast["forecast"],
     }
-    await audit_access((user or {}).get("user_id"), "insights.query", None, {"metric": metric, "months": months})
+    await audit_access(user.get("user_id"), "insights.query", None, {"metric": metric, "months": months})
     return _wrap(result)
 
 
