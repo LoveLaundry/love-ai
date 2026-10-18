@@ -108,6 +108,7 @@ def setup_security(app: FastAPI) -> None:
     from fastapi.middleware.cors import CORSMiddleware
 
     origins = settings.cors_origins
-    app.add_middleware(CORSMiddleware, allow_origins=origins, allow_credentials=False, allow_methods=["GET", "POST"], allow_headers=["*"])
-    app.add_middleware(RateLimitMiddleware, requests_per_minute=settings.rate_limit_per_minute)
+    # CORS is added last so it is outermost; see note in the other services.
     app.add_middleware(SecurityHeadersMiddleware)
+    app.add_middleware(RateLimitMiddleware, requests_per_minute=settings.rate_limit_per_minute)
+    app.add_middleware(CORSMiddleware, allow_origins=origins, allow_credentials=False, allow_methods=["GET", "POST"], allow_headers=["*"])
