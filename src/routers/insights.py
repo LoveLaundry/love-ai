@@ -5,7 +5,7 @@ import json
 
 from fastapi import APIRouter, Depends, Query
 
-from ..auth_helper import optional_current_user, verify_signed_request
+from ..auth_helper import verify_signed_request
 from ..crypto_helper import decrypt_dict, sha256_hex
 from ..security import audit_access
 from .. import analytics
@@ -47,8 +47,7 @@ async def health(_key: dict = Depends(verify_signed_request)):
 @router.get("/insights/dashboard")
 async def dashboard_insights(
     months: int = Query(12, ge=1, le=24),
-    _auth: dict = Depends(verify_signed_request),
-    user: dict | None = Depends(optional_current_user),
+    auth: dict = Depends(verify_signed_request),
 ):
     now_year, now_month = None, None  # analytics default = now
     # Projections keep the transfer small (series engine only reads these fields)
@@ -87,15 +86,14 @@ async def dashboard_insights(
         "total_payroll": round(sum(payroll_vals), 2),
         "avg_monthly_net": round(sum(net) / len(net), 2) if net else 0.0,
     }
-    await audit_access((user or {}).get("user_id"), "insights.dashboard", None, {"months": months})
+    await audit_access((auth.get("user") or {}).get("user_id") or (auth.get("user") or {}).get("auth_id"), "insights.dashboard", None, {"months": months})
     return _wrap(payload)
 
 
 @router.get("/insights/revenue")
 async def revenue_insights(
     months: int = Query(12, ge=1, le=24),
-    _auth: dict = Depends(verify_signed_request),
-    user: dict | None = Depends(optional_current_user),
+    auth: dict = Depends(verify_signed_request),
 ):
     txns = await transactions_collection().find(
         {}, {"transaction_date": 1, "total_amount": 1, "customer_id": 1, "customer_name": 1, "encryption_metadata": 1}
@@ -126,15 +124,14 @@ async def revenue_insights(
         "top_customers": top_customers,
         "projected_next_3_months": forecast["forecast"],
     }
-    await audit_access((user or {}).get("user_id"), "insights.revenue", None, {"months": months})
+    await audit_access((auth.get("user") or {}).get("user_id") or (auth.get("user") or {}).get("auth_id"), "insights.revenue", None, {"months": months})
     return _wrap(payload)
 
 
 @router.get("/insights/expenses")
 async def expense_insights(
     months: int = Query(12, ge=1, le=24),
-    _auth: dict = Depends(verify_signed_request),
-    user: dict | None = Depends(optional_current_user),
+    auth: dict = Depends(verify_signed_request),
 ):
     expenses = await expenses_collection().find(
         {}, {"date": 1, "amount": 1, "category_id": 1}
@@ -165,15 +162,14 @@ async def expense_insights(
         "top_categories": top_categories,
         "projected_next_3_months": forecast["forecast"],
     }
-    await audit_access((user or {}).get("user_id"), "insights.expenses", None, {"months": months})
+    await audit_access((auth.get("user") or {}).get("user_id") or (auth.get("user") or {}).get("auth_id"), "insights.expenses", None, {"months": months})
     return _wrap(payload)
 
 
 @router.get("/insights/salary")
 async def salary_insights(
     months: int = Query(12, ge=1, le=24),
-    _auth: dict = Depends(verify_signed_request),
-    user: dict | None = Depends(optional_current_user),
+    auth: dict = Depends(verify_signed_request),
 ):
     slips_docs = await salary_slips_collection().find(
         {"status": {"$ne": "DELETED"}},
@@ -201,14 +197,13 @@ async def salary_insights(
         "top_employees": [{**e, "total": round(e["total"], 2)} for e in employees_sorted[:10]],
         "projected_next_3_months": forecast["forecast"],
     }
-    await audit_access((user or {}).get("user_id"), "insights.salary", None, {"months": months})
+    await audit_access((auth.get("user") or {}).get("user_id") or (auth.get("user") or {}).get("auth_id"), "insights.salary", None, {"months": months})
     return _wrap(payload)
 
 
 @router.get("/insights/payroll-risk")
 async def payroll_risk_insights(
-    _auth: dict = Depends(verify_signed_request),
-    user: dict | None = Depends(optional_current_user),
+    auth: dict = Depends(verify_signed_request),
 ):
     # Outstanding advances grouped per employee
     advances = await salary_advances_collection().find(
@@ -235,15 +230,14 @@ async def payroll_risk_insights(
         "total_outstanding_advances": round(sum(r["outstanding"] for r in risk_rows), 2),
         "employees_at_risk": risk_rows,
     }
-    await audit_access((user or {}).get("user_id"), "insights.payroll_risk", None, {})
+    await audit_access((auth.get("user") or {}).get("user_id") or (auth.get("user") or {}).get("auth_id"), "insights.payroll_risk", None, {})
     return _wrap(payload)
 
 
 @router.post("/insights/query")
 async def custom_query(
     payload: dict,
-    _auth: dict = Depends(verify_signed_request),
-    user: dict | None = Depends(optional_current_user),
+    auth: dict = Depends(verify_signed_request),
 ):
     """Structured analytical query: {metric: 'revenue'|'expenses'|'salary'|'net', months?: int}."""
     metric = str(payload.get("metric") or "revenue").lower()
@@ -275,7 +269,7 @@ async def custom_query(
         "trend": "up" if forecast["slope"] > 0 else ("down" if forecast["slope"] < 0 else "flat"),
         "projected_next_3_months": forecast["forecast"],
     }
-    await audit_access((user or {}).get("user_id"), "insights.query", None, {"metric": metric, "months": months})
+    await audit_access((auth.get("user") or {}).get("user_id") or (auth.get("user") or {}).get("auth_id"), "insights.query", None, {"metric": metric, "months": months})
     return _wrap(result)
 
 
