@@ -8,6 +8,29 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # become the production encryption key.
 PLACEHOLDER_MASTER_KEY = "CHANGE-ME-IN-PRODUCTION-love-laundry-2026"
 
+# Always allow the deployed LoveLaundry web apps, even when a narrower
+# CORS_ORIGINS value is injected by the platform. A missing or stale env var
+# must never lock a frontend out again.
+DEFAULT_CORS_ORIGINS = [
+    "https://lovelaundry-manager.vercel.app",
+    "https://system-lovelaundry-lk.vercel.app",
+    "https://lovelaundry-shop-app.vercel.app",
+    "https://hotels-manager-amber.vercel.app",
+    "https://hotels-manager.vercel.app",
+    "https://shops-manager.vercel.app",
+    "http://localhost",
+    "http://localhost:3000",
+    "http://localhost:5173",
+    "http://localhost:5174",
+    "http://localhost:5175",
+    "http://localhost:5176",
+    "http://127.0.0.1:5173",
+    "http://localhost:8101",
+    "http://127.0.0.1:8101",
+    "http://localhost:8820",
+    "http://127.0.0.1:8820",
+]
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
@@ -66,17 +89,25 @@ class Settings(BaseSettings):
 
     @property
     def cors_origins(self) -> List[str]:
-        """Parsed CORS origins — accepts JSON array or comma-separated values."""
+        """Parsed CORS origins — accepts JSON array or comma-separated values.
+
+        Configured origins are merged with the known web apps so a stale
+        CORS_ORIGINS env var cannot lock a deployed frontend out.
+        """
         raw = self.cors.strip()
-        if not raw:
-            return []
-        try:
-            parsed = json.loads(raw)
-            if isinstance(parsed, list):
-                return [str(o) for o in parsed]
-        except (ValueError, TypeError):
-            pass
-        return [o.strip() for o in raw.split(",") if o.strip()]
+        configured: List[str] = []
+        if raw:
+            try:
+                parsed = json.loads(raw)
+                if isinstance(parsed, list):
+                    configured = [str(o).strip() for o in parsed]
+            except (ValueError, TypeError):
+                pass
+            if not configured:
+                configured = [o.strip() for o in raw.split(",") if o.strip()]
+        return list(dict.fromkeys(
+            o for o in configured + DEFAULT_CORS_ORIGINS if o and o != "*"
+        ))
 
     def resolve_main_uri(self) -> str:
         return self.mongodb_main_uri or self.mongo_uri
