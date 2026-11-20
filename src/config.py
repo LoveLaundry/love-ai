@@ -31,7 +31,7 @@ class Settings(BaseSettings):
     signature_ttl_seconds: int = 300
 
     cors: str = Field(
-        default='["http://localhost:5173","http://localhost:3000","https://lovelaundry-manager.vercel.app"]',
+        default='["http://localhost:5173","http://localhost:3000","https://lovelaundry-manager.vercel.app","https://system-lovelaundry-lk.vercel.app","https://lovelaundry-shop-app.vercel.app","https://hotels-manager-amber.vercel.app","https://hotels-manager.vercel.app","https://shops-manager.vercel.app","http://localhost","http://localhost:5174","http://localhost:5175","http://localhost:5176","http://127.0.0.1:5173","http://localhost:8101","http://127.0.0.1:8101","http://localhost:8820","http://127.0.0.1:8820"]',
         validation_alias=AliasChoices("CORS_ORIGINS"),
     )
     rate_limit_per_minute: int = 120
